@@ -44,6 +44,8 @@ namespace GiftCardLogParser
             List<Record> records;
             //YearOfTransactions year;
             RecordComparer recordComparer;
+            string diagnosticMessageIfAny;
+            List<string> diagnosticMessages;
             List<MoneyOwedToStore> storesOwed;
             Dictionary<string, List<Record>> decrementsBySerNum;
             Dictionary<string, List<Record>> incrementsBySerNum;
@@ -54,6 +56,7 @@ namespace GiftCardLogParser
             // Initialize
             _textBox.Text = string.Empty;
             recordComparer = new RecordComparer();
+            diagnosticMessages = new List<string>();
             decrementsBySerNum = new Dictionary<string, List<Record>>();
             incrementsBySerNum = new Dictionary<string, List<Record>>();
             //transactionsByYear = new Dictionary<int, YearOfTransactions>();
@@ -76,42 +79,45 @@ namespace GiftCardLogParser
                         {
                             continue;
                         }
+
                         //if (transactionsByYear.TryGetValue(record.DateTime.Year, out year) == false)
                         //{
                         //    year = new YearOfTransactions();
                         //    transactionsByYear.Add(record.DateTime.Year, year);
                         //}
-                        switch (record.Action)
+
+                        if (record.Action == "Activate" ||
+                            record.Action == "Increment" ||
+                            (record.Action == "Adjust" && record.Amount >= 0))
                         {
-                            case "Activate":
-                            case "Increment":
-                                if (incrementsBySerNum.TryGetValue(record.SerialNumber, out records) == false)
-                                {
-                                    records = new List<Record>();
-                                    incrementsBySerNum.Add(record.SerialNumber, records);
-                                }
-                                records.Add(record);
-                                records.Sort(recordComparer);
-                                break;
-                            case "Redeem":
-                            case "Adjust":
-                                if (decrementsBySerNum.TryGetValue(record.SerialNumber, out records) == false)
-                                {
-                                    records = new List<Record>();
-                                    decrementsBySerNum.Add(record.SerialNumber, records);
-                                }
-                                records.Add(record);
-                                records.Sort(recordComparer);
-                                break;
-                            default:
-                                MessageBox.Show(
-                                    string.Format("The line shown below from file \"{0}\" has an unsupported transaction type called \"{1}\".  " +
-                                        "The only supported transaction types are Activate, Increment, Redeem, and Adjust.\r\n\r\n{2}",
-                                        filename, record.Action, line),
-                                    "Error",
-                                    MessageBoxButtons.OK,
-                                    MessageBoxIcon.Error);
-                                break;
+                            if (incrementsBySerNum.TryGetValue(record.SerialNumber, out records) == false)
+                            {
+                                records = new List<Record>();
+                                incrementsBySerNum.Add(record.SerialNumber, records);
+                            }
+                            records.Add(record);
+                            records.Sort(recordComparer);
+                        }
+                        else if (record.Action == "Redeem" ||
+                                (record.Action == "Adjust" && record.Amount < 0))
+                        {
+                            if (decrementsBySerNum.TryGetValue(record.SerialNumber, out records) == false)
+                            {
+                                records = new List<Record>();
+                                decrementsBySerNum.Add(record.SerialNumber, records);
+                            }
+                            records.Add(record);
+                            records.Sort(recordComparer);
+                        }
+                        else
+                        {
+                            MessageBox.Show(
+                                string.Format("The line shown below from file \"{0}\" has an unsupported transaction type called \"{1}\".  " +
+                                    "The only supported transaction types are Activate, Increment, Redeem, and Adjust.\r\n\r\n{2}",
+                                    filename, record.Action, line),
+                                "Error",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
                         }
                     }
                 }
@@ -167,7 +173,11 @@ namespace GiftCardLogParser
                         }
 
                         // Process the decrement
-                        ProcessDecrement(decRecord, incrementsBySerNum, moneyOwedToStoresByStore);
+                        ProcessDecrement(decRecord, incrementsBySerNum, moneyOwedToStoresByStore, out diagnosticMessageIfAny);
+                        if (diagnosticMessageIfAny != null)
+                        {
+                            diagnosticMessages.Add(diagnosticMessageIfAny);
+                        }
                     }
                 }
 
@@ -190,14 +200,19 @@ namespace GiftCardLogParser
                     }
                     sb.Append("\r\n");
                 }
-                _textBox.Text += sb.ToString() + "\r\n";
+                foreach (string diagnosticMessage in diagnosticMessages)
+                {
+                    sb.Append(diagnosticMessage);
+                }
+                _textBox.Text += sb.ToString();
             }
         }
 
         private static void ProcessDecrement(
             Record decRecord,
             Dictionary<string, List<Record>> incrementsBySerNum,
-            Dictionary<string, List<MoneyOwedToStore>> moneyOwedToStoresByStore)
+            Dictionary<string, List<MoneyOwedToStore>> moneyOwedToStoresByStore,
+            out string diagnosticMessageIfAny)
         {
             // Locals
             double decAmount;
@@ -210,6 +225,7 @@ namespace GiftCardLogParser
 
             // Initialize
             decAmount = decRecord.Amount;
+            diagnosticMessageIfAny = null;
 
             // Get the increments of the card
             if (incrementsBySerNum.TryGetValue(decRecord.SerialNumber, out incRecords) == false)
@@ -243,12 +259,14 @@ namespace GiftCardLogParser
                 if (incRecord == null)
                 {
                     // Insufficient/no increment found?
-                    MessageBox.Show(
-                        string.Format("The data shows serial number {0} having greater redemptions than its increments.", decRecord.SerialNumber),
-                        "Warning",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-
+                    diagnosticMessageIfAny = string.Format(
+                        "⚠ The card with serial number {0} has a negative balance of {1:C} because it has greater debits than its credits.\r\n",
+                        decRecord.SerialNumber, decAmount);
+                    //MessageBox.Show(
+                    //    diagnosticMessageIfAny,
+                    //    "Warning",
+                    //    MessageBoxButtons.OK,
+                    //    MessageBoxIcon.Warning);
                     break;
                 }
 
